@@ -22,24 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 on:
-  push:
-    branches:
-      - main
-      - "releases/**"
-      - "deploy/**"
-      - "test*"
-    tags:
-      - v*
-  pull_request:
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE"
-      - ".vscode/**"
-      - ".gitignore"
-      - "licenses/**"
-      - "DISCLAIMER"
-      - "NOTICE"
-    types: ["opened", "reopened", "synchronize"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -169,7 +152,9 @@ jobs:
       MY_VAR: "PATH"
     strategy:
       matrix:
-        java-version: ${{ fromJSON(needs.changes.outputs.java_code == 'true' && '["8","11","17","21","25","26"]' || '["8"]') }}
+        java-version: ${{ fromJSON(needs.changes.outputs.java_code == 'true' && '["8","11","17","21","25","26"]' || 
+          '["8"]') }}
+      fail-fast: false
     steps:
       - uses: actions/checkout@v5
       - name: Set up JDK ${{ matrix.java-version }}
@@ -193,7 +178,7 @@ jobs:
         run: python ./ci/run_ci.py java --version ${{ matrix.java-version }}
       - name: Upload Test Report
         uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
+        if: always()
         with:
           name: test-reports-${{ matrix.java-version }}
           path: |
@@ -203,7 +188,7 @@ jobs:
   openj9:
     name: Openj9 Java CI
     needs: changes
-    if: needs.changes.outputs.java_code == 'true'
+    if: always()
     runs-on: ubuntu-latest
     env:
       MY_VAR: "PATH"
@@ -211,6 +196,7 @@ jobs:
       matrix:
         # String in openj9 1.8 share byte array by offset, fory doesn't allow it.
         java-version: ["21"]
+      fail-fast: false
     steps:
       - uses: actions/checkout@v5
       - name: Set up JDK ${{ matrix.java-version }}
@@ -268,7 +254,7 @@ jobs:
   android:
     name: Android Instrumented Tests API ${{ matrix.api-level }}
     needs: changes
-    if: needs.changes.outputs.java_code == 'true'
+    if: always()
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -313,7 +299,7 @@ jobs:
             gradle --no-daemon --stacktrace connectedCheck
       - name: Upload Android Test Report
         uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
+        if: always()
         with:
           name: android-test-reports-api-${{ matrix.api-level }}
           path: |
@@ -398,6 +384,8 @@ jobs:
       - name: Run C# IDL Tests
         run: ./integration_tests/idl_tests/run_csharp_tests.sh
 
+    strategy:
+      fail-fast: false
   swift:
     name: Swift CI
     needs: changes
@@ -441,7 +429,8 @@ jobs:
             ~/.swiftpm
             ~/Library/Caches/org.swift.swiftpm
             swift/.build
-          key: ${{ runner.os }}-${{ runner.arch }}-swiftpm-${{ hashFiles('swift/Package.resolved', 'swift/Package.swift', 'swift/Sources/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-swiftpm-${{ hashFiles('swift/Package.resolved', 
+            'swift/Package.swift', 'swift/Sources/**') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-swiftpm-
       - name: Prebuild Swift xlang peer for cache reuse
@@ -458,6 +447,8 @@ jobs:
           cd fory-core
           mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.SwiftXlangTest
 
+    strategy:
+      fail-fast: false
   swift_idl:
     name: Swift IDL Tests
     runs-on: macos-latest
@@ -487,7 +478,10 @@ jobs:
           path: |
             integration_tests/idl_tests/swift/idl_package/.build
             integration_tests/idl_tests/swift/idl_package/.swiftpm
-          key: ${{ runner.os }}-${{ runner.arch }}-swift-idl-package-${{ hashFiles('integration_tests/idl_tests/swift/idl_package/Package.swift', 'integration_tests/idl_tests/swift/idl_package/Package.resolved', 'swift/Package.swift', 'swift/Package.resolved', 'swift/Sources/ForyMacro/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-swift-idl-package-${{ 
+            hashFiles('integration_tests/idl_tests/swift/idl_package/Package.swift', 
+            'integration_tests/idl_tests/swift/idl_package/Package.resolved', 'swift/Package.swift', 
+            'swift/Package.resolved', 'swift/Sources/ForyMacro/**') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-swift-idl-package-
       - name: Prebuild Swift IDL package
@@ -509,14 +503,17 @@ jobs:
           IDL_PEER_LANG: "swift"
         run: ./integration_tests/idl_tests/run_java_tests.sh
 
+    strategy:
+      fail-fast: false
   graalvm:
     name: GraalVM CI
     needs: changes
-    if: needs.changes.outputs.graalvm == 'true'
+    if: always()
     runs-on: ubuntu-latest
     strategy:
       matrix:
         java-version: ["17", "21", "25"]
+      fail-fast: false
     steps:
       - uses: actions/checkout@v5
       - uses: graalvm/setup-graalvm@f744c72a42b1995d7b0cbc314bde4bace7ac1fe1 # 1.5.0
@@ -543,13 +540,14 @@ jobs:
   kotlin:
     name: Kotlin CI
     needs: changes
-    if: needs.changes.outputs.kotlin == 'true'
+    if: always()
     runs-on: ubuntu-latest
     env:
       MY_VAR: "PATH"
     strategy:
       matrix:
         java-version: ["8", "11", "17", "21"]
+      fail-fast: false
     steps:
       - uses: actions/checkout@v5
       - name: Set up JDK ${{ matrix.java-version }}
@@ -576,7 +574,7 @@ jobs:
   scala:
     name: Scala CI
     needs: changes
-    if: needs.changes.outputs.scala == 'true'
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -595,11 +593,14 @@ jobs:
             ${{ runner.os }}-maven-
       - uses: sbt/setup-sbt@2e222825582620cc38d2a54e674f3c01b7c14f5d # v1.1.24
       - name: Install fory java
-        run: cd java && mvn -T10 --no-transfer-progress clean install -DskipTests -Dmaven.javadoc.skip=true -Dmaven.source.skip=true && cd -
+        run: cd java && mvn -T10 --no-transfer-progress clean install -DskipTests -Dmaven.javadoc.skip=true 
+          -Dmaven.source.skip=true && cd -
       - name: Test
         run: |
           cd scala && sbt +test && cd -
 
+    strategy:
+      fail-fast: false
   scala_xlang:
     name: Scala Xlang Test
     runs-on: ubuntu-latest
@@ -633,6 +634,8 @@ jobs:
           cd fory-core
           mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.ScalaXlangTest
 
+    strategy:
+      fail-fast: false
   scala_idl:
     name: Scala IDL Tests
     runs-on: ubuntu-latest
@@ -663,6 +666,8 @@ jobs:
       - name: Run Scala IDL Tests
         run: ./integration_tests/idl_tests/run_scala_tests.sh
 
+    strategy:
+      fail-fast: false
   integration_tests:
     name: Integration Tests
     runs-on: ubuntu-latest
@@ -687,6 +692,8 @@ jobs:
       - name: Run CI
         run: python ./ci/run_ci.py java --version integration_tests
 
+    strategy:
+      fail-fast: false
   grpc_tests:
     name: Java/Python gRPC Tests
     runs-on: ubuntu-latest
@@ -716,6 +723,8 @@ jobs:
       - name: Run Java/Python gRPC Tests
         run: ./integration_tests/grpc_tests/run_tests.sh
 
+    strategy:
+      fail-fast: false
   javascript:
     name: JavaScript CI
     needs: changes
@@ -792,13 +801,16 @@ jobs:
       - name: Run JavaScript IDL Tests
         run: ./integration_tests/idl_tests/run_javascript_tests.sh
 
+    strategy:
+      fail-fast: false
   rust:
     name: Rust CI
     needs: changes
     strategy:
       matrix:
         # macos-14 is the arm64 runner; keep it for Rust code changes only.
-        os: ${{ fromJSON(needs.changes.outputs.rust == 'true' && '["ubuntu-latest","macos-14","macos-latest"]' || '["ubuntu-latest","macos-latest"]') }}
+        os: ${{ fromJSON(needs.changes.outputs.rust == 'true' && '["ubuntu-latest","macos-14","macos-latest"]' || 
+          '["ubuntu-latest","macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -865,6 +877,8 @@ jobs:
       - name: Run Rust IDL Tests
         run: ./integration_tests/idl_tests/run_rust_tests.sh
 
+    strategy:
+      fail-fast: false
   cpp:
     name: C++ CI
     strategy:
@@ -894,7 +908,8 @@ jobs:
             ~/Library/Caches/bazel/external
             C:\users\runneradmin\.bazel\external
             C:\users\runneradmin\_bazel_runneradmin\*/external
-          key: bazel-repo-${{ runner.os }}-${{ runner.arch }}-py311-${{ hashFiles('WORKSPACE', '.bazelrc', 'bazel/**') }}
+          key: bazel-repo-${{ runner.os }}-${{ runner.arch }}-py311-${{ hashFiles('WORKSPACE', '.bazelrc', 'bazel/**') 
+            }}
           restore-keys: |
             bazel-repo-${{ runner.os }}-${{ runner.arch }}-py311-
       - name: Cache Bazel build outputs
@@ -944,7 +959,8 @@ jobs:
           path: |
             C:\users\runneradmin\.bazel\external
             C:\users\runneradmin\_bazel_runneradmin\*/external
-          key: bazel-repo-${{ runner.os }}-${{ runner.arch }}-py311-${{ hashFiles('WORKSPACE', '.bazelrc', 'bazel/**') }}
+          key: bazel-repo-${{ runner.os }}-${{ runner.arch }}-py311-${{ hashFiles('WORKSPACE', '.bazelrc', 'bazel/**') 
+            }}
           restore-keys: |
             bazel-repo-${{ runner.os }}-${{ runner.arch }}-py311-
       - name: Cache Bazel build outputs
@@ -994,7 +1010,8 @@ jobs:
           path: |
             ~/.bazel/external
             ~/.cache/bazel/_bazel_*/*/external
-          key: bazel-repo-sanitizer-${{ runner.os }}-${{ runner.arch }}-py311-${{ hashFiles('WORKSPACE', '.bazelrc', 'bazel/**') }}
+          key: bazel-repo-sanitizer-${{ runner.os }}-${{ runner.arch }}-py311-${{ hashFiles('WORKSPACE', '.bazelrc', 
+            'bazel/**') }}
           restore-keys: |
             bazel-repo-sanitizer-${{ runner.os }}-${{ runner.arch }}-py311-
       - name: Cache Bazel build outputs
@@ -1004,7 +1021,8 @@ jobs:
           path: |
             ~/.bazel
             ~/.cache/bazel
-          key: bazel-build-cpp-sanitizer-${{ runner.os }}-${{ runner.arch }}-${{ matrix.sanitizer }}-${{ hashFiles('cpp/**', 'BUILD', 'WORKSPACE', '.bazelrc') }}
+          key: bazel-build-cpp-sanitizer-${{ runner.os }}-${{ runner.arch }}-${{ matrix.sanitizer }}-${{ 
+            hashFiles('cpp/**', 'BUILD', 'WORKSPACE', '.bazelrc') }}
       - name: Install Bazel and C++ deps
         run: python ./ci/run_ci.py cpp --install-deps-only
       - name: Run C++ ${{ matrix.sanitizer }} tests
@@ -1077,6 +1095,8 @@ jobs:
           cd fory-core
           mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.CPPXlangTest
 
+    strategy:
+      fail-fast: false
   cpp_idl:
     name: C++ IDL Tests
     runs-on: ubuntu-latest
@@ -1104,7 +1124,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: integration_tests/idl_tests/cpp/build
-          key: cpp-idl-cmake-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('integration_tests/idl_tests/cpp/**', 'integration_tests/idl_tests/*.fdl', 'integration_tests/idl_tests/generate_idl.py', 'compiler/**', 'cpp/**') }}
+          key: cpp-idl-cmake-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('integration_tests/idl_tests/cpp/**', 
+            'integration_tests/idl_tests/*.fdl', 'integration_tests/idl_tests/generate_idl.py', 'compiler/**', 'cpp/**')
+            }}
           restore-keys: |
             cpp-idl-cmake-${{ runner.os }}-${{ runner.arch }}-
           save-always: true
@@ -1117,6 +1139,8 @@ jobs:
           FORY_CPP_IDL_SKIP_BUILD: ${{ steps.cpp-idl-cmake-cache.outputs.cache-hit == 'true' && '1' || '' }}
         run: ./integration_tests/idl_tests/run_cpp_tests.sh
 
+    strategy:
+      fail-fast: false
   cpp_examples:
     name: C++ Examples
     runs-on: ubuntu-latest
@@ -1267,6 +1291,8 @@ jobs:
       - name: Run Python IDL Tests
         run: ./integration_tests/idl_tests/run_python_tests.sh
 
+    strategy:
+      fail-fast: false
   go:
     name: Golang CI
     runs-on: ubuntu-latest
@@ -1332,6 +1358,8 @@ jobs:
       - name: Run Go IDL Tests
         run: ./integration_tests/idl_tests/run_go_tests.sh
 
+    strategy:
+      fail-fast: false
   kotlin_xlang:
     name: Kotlin Xlang Test
     runs-on: ubuntu-latest
@@ -1359,6 +1387,8 @@ jobs:
           cd fory-core
           mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.KotlinXlangTest
 
+    strategy:
+      fail-fast: false
   android_go_xlang:
     name: Android Go Xlang Tests
     runs-on: ubuntu-latest
@@ -1404,6 +1434,8 @@ jobs:
           ENABLE_FORY_DEBUG_OUTPUT: "1"
         run: python ./ci/run_ci.py android-go-xlang-static-processor
 
+    strategy:
+      fail-fast: false
   android_serializer:
     name: Android Serializer JVM Round Trip Test
     runs-on: ubuntu-latest
@@ -1431,6 +1463,8 @@ jobs:
           cd fory-core
           mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.serializer.AndroidJvmRoundTripTest
 
+    strategy:
+      fail-fast: false
   dart_xlang:
     name: Dart Xlang Test
     runs-on: ubuntu-latest
@@ -1480,6 +1514,8 @@ jobs:
           cd fory-core
           mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.DartXlangTest
 
+    strategy:
+      fail-fast: false
   dart:
     name: Dart CI
     runs-on: ubuntu-latest
