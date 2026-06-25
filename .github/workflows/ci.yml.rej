@@ -1,0 +1,9 @@
+@@ -100,6 +100,6 @@
+       - uses: actions/checkout@v5
+       - name: Set up JDK ${{ matrix.java-version }}
+         uses: actions/setup-java@v4
+         with:
+           java-version: ${{ matrix.java-version }}
+-          distribution: "temurin"
++          distribution: ${{ (matrix.java-version == '8' && runner.os == 'macOS') && 'zulu' || 'temurin' }}
+\ No newline at end of line
