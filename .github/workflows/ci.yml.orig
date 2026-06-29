@@ -1,0 +1,1188 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Fory CI
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - main
+      - "releases/**"
+      - "deploy/**"
+      - "test*"
+    tags:
+      - v*
+  pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE"
+      - ".vscode/**"
+      - ".gitignore"
+      - "licenses/**"
+      - "DISCLAIMER"
+      - "NOTICE"
+    types: ["opened", "reopened", "synchronize"]
+
+jobs:
+  compiler:
+    name: Compiler CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install python dependencies
+        run: pip install pytest
+      - name: Run compiler CI
+        run: |
+          cd compiler
+          pytest -q fory_compiler/tests
+
+  java:
+    name: Java CI
+    runs-on: ubuntu-latest
+    env:
+      MY_VAR: "PATH"
+    strategy:
+      matrix:
+        java-version: ["8", "11", "17", "21", "25"]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up JDK ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java-version }}
+          distribution: "temurin"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Set up Python3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.8
+          cache: 'pip'
+      - name: Run CI with Maven
+        run: python ./ci/run_ci.py java --version ${{ matrix.java-version }}
+      - name: Upload Test Report
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: test-reports-${{ matrix.java-version }}
+          path: |
+            **/target/surefire-reports/**
+            **/hs_err*.log
+
+  openj9:
+    name: Openj9 Java CI
+    runs-on: ubuntu-latest
+    env:
+      MY_VAR: "PATH"
+    strategy:
+      matrix:
+        # String in openj9 1.8 share byte array by offset, fory doesn't allow it.
+        java-version: ["21"]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up JDK ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java-version }}
+          distribution: "adopt-openj9"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Set up Python3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.8
+          cache: 'pip'
+      - name: Run CI with Maven
+        run: python ./ci/run_ci.py java --version ${{ matrix.java-version }}
+
+  java21_windows:
+    name: Windows Java 21 CI
+    runs-on: windows-2022
+    env:
+      MY_VAR: "PATH"
+    strategy:
+      matrix:
+        java-version: ["21"]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up JDK ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java-version }}
+          distribution: "temurin"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Run CI with Maven
+        shell: bash
+        run: python ./ci/run_ci.py java --version windows_java21
+
+  csharp:
+    name: C# CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+          cache: true
+          cache-dependency-path: |
+            csharp/**/*.csproj
+            csharp/Fory.sln
+      - name: Restore C# dependencies
+        run: |
+          cd csharp
+          dotnet restore Fory.sln
+      - name: Build C# solution
+        run: |
+          cd csharp
+          dotnet build Fory.sln -c Release --no-restore
+      - name: Run C# tests
+        run: |
+          cd csharp
+          dotnet test tests/Fory.Tests/Fory.Tests.csproj -c Release --no-build
+      - name: Verify C# format
+        run: |
+          cd csharp
+          dotnet format Fory.sln --verify-no-changes \
+            --exclude src/Fory.Generator/AnalyzerReleases.Shipped.md \
+            --exclude src/Fory.Generator/AnalyzerReleases.Unshipped.md
+
+  csharp_xlang:
+    name: C# Xlang Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+          cache: true
+          cache-dependency-path: |
+            csharp/**/*.csproj
+            csharp/Fory.sln
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: "temurin"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Restore and build C# xlang peer
+        run: |
+          cd csharp
+          dotnet restore tests/Fory.XlangPeer/Fory.XlangPeer.csproj
+          dotnet build tests/Fory.XlangPeer/Fory.XlangPeer.csproj -c Debug --no-restore
+      - name: Run C# Xlang Test
+        env:
+          FORY_CSHARP_JAVA_CI: "1"
+          ENABLE_FORY_DEBUG_OUTPUT: "1"
+        run: |
+          cd java
+          mvn -T16 --no-transfer-progress clean install -DskipTests -Dmaven.javadoc.skip=true -Dmaven.source.skip=true
+          cd fory-core
+          mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.CSharpXlangTest
+      - name: Run C# IDL Tests
+        run: ./integration_tests/idl_tests/run_csharp_tests.sh
+
+  swift:
+    name: Swift CI
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run Swift unit tests
+        run: |
+          cd swift
+          swift test
+      - name: Run SwiftLint check
+        run: |
+          if ! command -v swiftlint >/dev/null; then
+            brew install swiftlint
+          fi
+          cd swift
+          swiftlint lint --config .swiftlint.yml
+
+  swift_xlang:
+    name: Swift Xlang Test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: "temurin"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Cache Swift package dependencies and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.swiftpm
+            ~/Library/Caches/org.swift.swiftpm
+            swift/.build
+          key: ${{ runner.os }}-${{ runner.arch }}-swiftpm-${{ hashFiles('swift/Package.resolved', 'swift/Package.swift', 'swift/Sources/**') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-swiftpm-
+      - name: Prebuild Swift xlang peer for cache reuse
+        run: |
+          cd swift
+          swift build -c release --disable-automatic-resolution --product ForyXlangTests
+      - name: Run Swift Xlang Test
+        env:
+          ENABLE_FORY_DEBUG_OUTPUT: "1"
+          FORY_SWIFT_JAVA_CI: "1"
+        run: |
+          cd java
+          mvn -T16 --no-transfer-progress clean install -DskipTests -Dmaven.javadoc.skip=true -Dmaven.source.skip=true
+          cd fory-core
+          mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.SwiftXlangTest
+      - name: Generate Swift IDL test code
+        run: python ./integration_tests/idl_tests/generate_idl.py --lang swift
+      - name: Cache Swift IDL package build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            integration_tests/idl_tests/swift/idl_package/.build
+            integration_tests/idl_tests/swift/idl_package/.swiftpm
+          key: ${{ runner.os }}-${{ runner.arch }}-swift-idl-package-${{ hashFiles('integration_tests/idl_tests/swift/idl_package/Package.swift', 'integration_tests/idl_tests/swift/idl_package/Package.resolved', 'swift/Package.swift', 'swift/Package.resolved', 'swift/Sources/ForyMacro/**') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-swift-idl-package-
+      - name: Prebuild Swift IDL package
+        run: |
+          cd integration_tests/idl_tests/swift/idl_package
+          swift build --disable-automatic-resolution --build-tests
+      - name: Run Swift IDL package tests
+        env:
+          ENABLE_FORY_DEBUG_OUTPUT: "1"
+        run: |
+          cd integration_tests/idl_tests/swift/idl_package
+          swift test --disable-automatic-resolution --skip-build
+      - name: Run Java IDL tests against Swift peer
+        env:
+          IDL_PEER_LANG: "swift"
+        run: ./integration_tests/idl_tests/run_java_tests.sh
+
+  graalvm:
+    name: GraalVM CI
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java-version: ["17", "21", "25"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: graalvm/setup-graalvm@f744c72a42b1995d7b0cbc314bde4bace7ac1fe1 # 1.5.0
+        with:
+          java-version: ${{ matrix.java-version }}
+          distribution: "graalvm"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          native-image-job-reports: "true"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Set up Python3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.8
+      - name: Build native image and run
+        shell: bash
+        run: python ./ci/run_ci.py java --version graalvm
+
+  kotlin:
+    name: Kotlin CI
+    runs-on: ubuntu-latest
+    env:
+      MY_VAR: "PATH"
+    strategy:
+      matrix:
+        java-version: ["8", "11", "17", "21"]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up JDK ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java-version }}
+          distribution: "temurin"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.8
+      - name: Install fory java
+        run: python ./ci/run_ci.py java --install-jdks --install-fory
+      - name: Run Kotlin CI
+        run: python ./ci/run_ci.py kotlin
+
+  scala:
+    name: Scala CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up JDK11
+        uses: actions/setup-java@v4
+        with:
+          java-version: 11
+          distribution: "temurin"
+          cache: sbt
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - uses: sbt/setup-sbt@1cad58d595b729a71ca2254cdf5b43dd6f42d4bb # v1.1.18
+      - name: Install fory java
+        run: cd java && mvn -T10 --no-transfer-progress clean install -DskipTests -Dmaven.javadoc.skip=true -Dmaven.source.skip=true && cd -
+      - name: Test
+        run: |
+          cd scala && sbt +test && cd -
+
+  integration_tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up JDK11
+        uses: actions/setup-java@v4
+        with:
+          java-version: 11
+          distribution: "temurin"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.8
+      - name: Run CI
+        run: python ./ci/run_ci.py java --version integration_tests
+
+  javascript:
+    name: JavaScript CI
+    strategy:
+      matrix:
+        node-version: [18, 24]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache-dependency-path: javascript/package-lock.json
+          cache: "npm"
+      - name: Upgrade npm
+        run: npm install -g npm@8
+      # node-gyp needs to use python and relies on the distutils module.
+      # The distutils module has been removed starting from python 3.12
+      # (see https://docs.python.org/3.10/library/distutils.html). Some
+      # OS (such as macos-latest) uses python3.12 by default, so python 3.8
+      # is used here to avoid this problem. On Windows, use 3.11 to avoid
+      # the slower 3.8 download on hosted runners.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ runner.os == 'Windows' && '3.11' || '3.8' }}
+      - name: Run CI with NodeJS
+        run: python ./ci/run_ci.py javascript
+
+  javascript_xlang:
+    name: JavaScript Xlang Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: "temurin"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Cache npm local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('javascript/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+      - name: Install JavaScript dependencies
+        run: |
+          cd javascript
+          npm install
+          npm run build
+      - name: Run JavaScript Xlang Test
+        env:
+          FORY_JAVASCRIPT_JAVA_CI: "1"
+        run: |
+          cd java
+          mvn -T16 --no-transfer-progress clean install -DskipTests -Dmaven.javadoc.skip=true -Dmaven.source.skip=true
+          cd fory-core
+          mvn --no-transfer-progress test -Dtest=org.apache.fory.xlang.JavaScriptXlangTest -DforkCount=0
+      - name: Run JavaScript IDL Tests
+        run: ./integration_tests/idl_tests/run_javascript_tests.sh
+
+  rust:
+    name: Rust CI
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, macos-latest]  # macos-14: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Set up Java 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: 11
+          distribution: temurin
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Run Rust CI
+        run: python ./ci/run_ci.py rust
+
+  rust_xlang:
+    name: Rust Xlang Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: "temurin"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Run Rust Xlang Test
+        env:
+          FORY_RUST_JAVA_CI: "1"
+          ENABLE_FORY_DEBUG_OUTPUT: "1"
+        run: |
+          cd java
+          mvn -T16 --no-transfer-progress clean install -DskipTests -Dmaven.javadoc.skip=true -Dmaven.source.skip=true
+          cd fory-core
+          mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.RustXlangTest
+      - name: Run Rust IDL Tests
+        run: ./integration_tests/idl_tests/run_rust_tests.sh
+
+  cpp:
+    name: C++ CI
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+          cache: 'pip'
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@083175551ceeceebc757ebee2127fde78840ca77 # 0.18.0
+        with:
+          bazelisk-cache: true
+          bazelisk-version: '1.x'
+      - name: Cache Bazel repository cache
+        uses: actions/cache@v4
+        with:
+          # setup-bazel uses ~/.bazel on GitHub-hosted runners.
+          path: |
+            ~/.bazel/external
+            ~/.cache/bazel/_bazel_*/*/external
+            ~/Library/Caches/bazel/_bazel_*/*/external
+            ~/Library/Caches/bazel/external
+            C:\users\runneradmin\.bazel\external
+            C:\users\runneradmin\_bazel_runneradmin\*/external
+          key: bazel-repo-${{ runner.os }}-${{ runner.arch }}-py311-${{ hashFiles('WORKSPACE', '.bazelrc', 'bazel/**') }}
+          restore-keys: |
+            bazel-repo-${{ runner.os }}-${{ runner.arch }}-py311-
+      - name: Cache Bazel build outputs
+        uses: actions/cache@v4
+        with:
+          # setup-bazel uses ~/.bazel on GitHub-hosted runners.
+          path: |
+            ~/.bazel
+            ~/.cache/bazel
+            ~/Library/Caches/bazel
+            C:\users\runneradmin\.bazel
+            C:\users\runneradmin\_bazel_runneradmin
+          key: bazel-build-cpp-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cpp/**', 'BUILD', 'WORKSPACE') }}
+      - name: Run C++ CI with Bazel
+        run: python ./ci/run_ci.py cpp
+      - name: Upload Bazel Test Logs
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: bazel-test-logs-${{ matrix.os }}
+          path: |
+            bazel-out/*/testlogs/**/*.log
+            bazel-out/*/testlogs/**/*.xml
+          if-no-files-found: ignore
+
+  cpp_sanitizers:
+    name: C++ Sanitizer (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        sanitizer: [asan, ubsan]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+          cache: 'pip'
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@083175551ceeceebc757ebee2127fde78840ca77 # 0.18.0
+        with:
+          bazelisk-cache: true
+          bazelisk-version: '1.x'
+      - name: Cache Bazel repository cache
+        uses: actions/cache@v4
+        with:
+          # setup-bazel uses ~/.bazel on GitHub-hosted runners.
+          path: |
+            ~/.bazel/external
+            ~/.cache/bazel/_bazel_*/*/external
+          key: bazel-repo-sanitizer-${{ runner.os }}-${{ runner.arch }}-py311-${{ hashFiles('WORKSPACE', '.bazelrc', 'bazel/**') }}
+          restore-keys: |
+            bazel-repo-sanitizer-${{ runner.os }}-${{ runner.arch }}-py311-
+      - name: Cache Bazel build outputs
+        uses: actions/cache@v4
+        with:
+          # setup-bazel uses ~/.bazel on GitHub-hosted runners.
+          path: |
+            ~/.bazel
+            ~/.cache/bazel
+          key: bazel-build-cpp-sanitizer-${{ runner.os }}-${{ runner.arch }}-${{ matrix.sanitizer }}-${{ hashFiles('cpp/**', 'BUILD', 'WORKSPACE', '.bazelrc') }}
+      - name: Install Bazel and C++ deps
+        run: python ./ci/run_ci.py cpp --install-deps-only
+      - name: Run C++ ${{ matrix.sanitizer }} tests
+        run: |
+          ARCH="$(uname -m)"
+          BAZEL_CONFIGS="--config=${{ matrix.sanitizer }}"
+          if [[ "${ARCH}" == "x86_64" || "${ARCH}" == "amd64" ]]; then
+            BAZEL_CONFIGS="--config=x86_64 ${BAZEL_CONFIGS}"
+          fi
+          TEST_TARGETS=(
+            //cpp/fory/util:buffer_test
+            //cpp/fory/util:error_test
+            //cpp/fory/util:logging_test
+            //cpp/fory/util:result_test
+            //cpp/fory/meta:enum_info_test
+            //cpp/fory/meta:field_info_test
+            //cpp/fory/meta:meta_string_test
+            //cpp/fory/meta:type_traits_test
+            //cpp/fory/row:row_test
+            //cpp/fory/encoder:row_encoder_test
+            //cpp/fory/serialization:serialization_test
+            //cpp/fory/serialization:namespace_macro_test
+            //cpp/fory/serialization:stream_test
+          )
+          bazel test --cache_test_results=no ${BAZEL_CONFIGS} "${TEST_TARGETS[@]}"
+      - name: Upload Bazel Test Logs (${{ matrix.sanitizer }})
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: bazel-test-logs-${{ matrix.sanitizer }}
+          path: |
+            bazel-out/*/testlogs/**/*.log
+            bazel-out/*/testlogs/**/*.xml
+          if-no-files-found: ignore
+
+  cpp_xlang:
+    name: C++ Xlang Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+          cache: 'pip'
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: "temurin"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@083175551ceeceebc757ebee2127fde78840ca77 # 0.18.0
+        with:
+          bazelisk-cache: true
+          bazelisk-version: '1.x'
+      - name: Run CPP Xlang Test
+        env:
+          FORY_CPP_JAVA_CI: "1"
+          ENABLE_FORY_DEBUG_OUTPUT: "1"
+        run: |
+          cd java
+          mvn -T16 --no-transfer-progress clean install -DskipTests -Dmaven.javadoc.skip=true -Dmaven.source.skip=true
+          cd fory-core
+          mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.CPPXlangTest
+      - name: Run C++ IDL Tests
+        run: ./integration_tests/idl_tests/run_cpp_tests.sh
+
+  cpp_examples:
+    name: C++ Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@083175551ceeceebc757ebee2127fde78840ca77 # 0.18.0
+        with:
+          bazelisk-cache: true
+          bazelisk-version: '1.x'
+      - name: Build and run C++ hello_world example (CMake)
+        run: |
+          cd examples/cpp/hello_world
+          ./run.sh
+      - name: Build and run C++ hello_row example (CMake)
+        run: |
+          cd examples/cpp/hello_row
+          ./run.sh
+      - name: Build and run C++ hello_world example (Bazel)
+        run: |
+          cd examples/cpp/hello_world
+          ./run_bazel.sh
+      - name: Build and run C++ hello_row example (Bazel)
+        run: |
+          cd examples/cpp/hello_row
+          ./run_bazel.sh
+
+  python:
+    name: Python CI
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        python-version: ['3.8', '3.12', '3.13']
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-2022]
+        # windows-2022 runners don't have Python 3.8 preinstalled, and pinned 3.13.3
+        # forces a download/reinstall; use cached 3.11/3.12/3.13 on Windows instead.
+        exclude:
+          - os: windows-2022
+            python-version: '3.8'
+        include:
+          - os: windows-2022
+            python-version: '3.11'
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@083175551ceeceebc757ebee2127fde78840ca77 # 0.18.0
+        with:
+          bazelisk-cache: true
+          bazelisk-version: '1.x'
+      - name: Clean Bazel cache (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "Cleaning Bazel cache to ensure fresh build..."
+          bazel clean --expunge || true
+      - name: Run Python CI
+        shell: bash
+        run: python ./ci/run_ci.py python
+      - name: Run Python CI (ENABLE_FORY_CYTHON_SERIALIZATION=1)
+        shell: bash
+        env:
+          ENABLE_FORY_CYTHON_SERIALIZATION: "1"
+        run: python ./ci/run_ci.py python
+
+  python_xlang:
+    name: Python Xlang Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+          cache: 'pip'
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: "temurin"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Install pyfory
+        run: bash ci/run_ci.sh install_pyfory
+      - name: Run Python Xlang Test
+        env:
+          FORY_PYTHON_JAVA_CI: "1"
+          ENABLE_FORY_DEBUG_OUTPUT: "1"
+        run: |
+          cd java
+          mvn -T16 --no-transfer-progress clean install -DskipTests -Dmaven.javadoc.skip=true -Dmaven.source.skip=true
+          cd fory-core
+          mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.PythonXlangTest
+          mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.PyCrossLanguageTest
+          cd ../fory-format
+          mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.format.CrossLanguageTest
+      - name: Run Python IDL Tests
+        run: ./integration_tests/idl_tests/run_python_tests.sh
+
+  go:
+    name: Golang CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup Go 1.23
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.23"
+      - name: Display Go version
+        run: go version
+      - name: Set up Python3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.8
+          cache: 'pip'
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@083175551ceeceebc757ebee2127fde78840ca77 # 0.18.0
+        with:
+          bazelisk-cache: true
+          bazelisk-version: '1.x'
+      - name: Install python dependencies
+        run: pip install pyarrow cython wheel pytest setuptools -U
+      - name: Install pyfory for xlang tests
+        run: pip install -e python/
+      - name: Run Golang CI
+        run: python ./ci/run_ci.py go
+
+  go_xlang:
+    name: Go Xlang Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: "temurin"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Run Go Xlang Test
+        env:
+          FORY_GO_JAVA_CI: "1"
+          ENABLE_FORY_DEBUG_OUTPUT: "1"
+        run: |
+          cd java
+          mvn -T16 --no-transfer-progress clean install -DskipTests -Dmaven.javadoc.skip=true -Dmaven.source.skip=true
+          cd fory-core
+          mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.GoXlangTest
+      - name: Run Go IDL Tests
+        run: ./integration_tests/idl_tests/run_go_tests.sh
+
+  dart_xlang:
+    name: Dart Xlang Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: "temurin"
+      - name: Cache Maven local repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Install Dart SDK
+        run: |
+          DART_VERSION=3.6.1
+          wget -q https://storage.googleapis.com/dart-archive/channels/stable/release/${DART_VERSION}/sdk/dartsdk-linux-x64-release.zip
+          unzip -q dartsdk-linux-x64-release.zip
+          echo "$PWD/dart-sdk/bin" >> $GITHUB_PATH
+      - name: Display Dart version
+        run: dart --version
+      - name: Get Dart dependencies
+        run: |
+          cd dart
+          dart pub get
+      - name: Generate Dart code
+        run: |
+          (
+            cd dart/packages/fory
+            dart run build_runner build --delete-conflicting-outputs
+          )
+          (
+            cd dart/packages/fory-test
+            dart run build_runner build --delete-conflicting-outputs
+          )
+      - name: Run Dart Xlang Test
+        env:
+          FORY_DART_JAVA_CI: "1"
+          ENABLE_FORY_DEBUG_OUTPUT: "1"
+        run: |
+          cd java
+          mvn -T16 --no-transfer-progress clean install -DskipTests -Dmaven.javadoc.skip=true -Dmaven.source.skip=true
+          cd fory-core
+          mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.DartXlangTest
+
+  dart:
+    name: Dart CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Dart SDK
+        run: |
+          # Download and install Dart SDK
+          DART_VERSION=3.6.1
+          wget -q https://storage.googleapis.com/dart-archive/channels/stable/release/${DART_VERSION}/sdk/dartsdk-linux-x64-release.zip
+          unzip -q dartsdk-linux-x64-release.zip
+          export PATH="$PATH:$PWD/dart-sdk/bin"
+          echo "$PWD/dart-sdk/bin" >> $GITHUB_PATH
+      - name: Display Dart version
+        run: dart --version
+      - name: Get dependencies
+        run: |
+          cd dart
+          dart pub get
+      - name: Generate code
+        run: |
+          (
+            cd dart/packages/fory
+            dart run build_runner build --delete-conflicting-outputs
+          )
+          (
+            cd dart/packages/fory-test
+            dart run build_runner build --delete-conflicting-outputs
+          )
+      - name: Run tests
+        run: |
+          cd dart/packages/fory-test
+          dart test
+      - name: Run web tests
+        run: |
+          cd dart/packages/fory
+          dart test -p chrome
+      - name: Run code analysis
+        run: |
+          cd dart/packages/fory-test
+          dart analyze
+      - name: Analyze code
+        run: |
+          cd dart
+          dart analyze
+
+  dart_flutter:
+    name: Dart Flutter CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set Flutter smoke dir
+        run: echo "FLUTTER_SMOKE_DIR=$RUNNER_TEMP/fory_flutter_smoke" >> "$GITHUB_ENV"
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Install Flutter Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgtk-3-dev
+      - name: Display Flutter version
+        run: flutter --version
+      - name: Create Flutter smoke app
+        run: |
+          rm -rf "$FLUTTER_SMOKE_DIR"
+          flutter create --empty --project-name fory_flutter_smoke "$FLUTTER_SMOKE_DIR"
+      - name: Configure Flutter smoke app
+        run: |
+          mkdir -p "$FLUTTER_SMOKE_DIR/lib" "$FLUTTER_SMOKE_DIR/test"
+          cat <<EOF | sed 's/^          //' > "$FLUTTER_SMOKE_DIR/pubspec.yaml"
+          name: fory_flutter_smoke
+          description: Flutter smoke app for Apache Fory CI.
+          publish_to: none
+
+          environment:
+            sdk: ^3.6.1
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            fory:
+              path: ${GITHUB_WORKSPACE}/dart/packages/fory
+
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+            flutter_lints: ^5.0.0
+            build_runner: ^2.4.13
+
+          flutter:
+            uses-material-design: true
+          EOF
+          cat <<'EOF' | sed 's/^          //' > "$FLUTTER_SMOKE_DIR/lib/person.dart"
+          import 'package:fory/fory.dart';
+
+          part 'person.fory.dart';
+
+          @ForyStruct()
+          class Person {
+            Person();
+
+            String name = '';
+            Int32 age = Int32(0);
+          }
+          EOF
+          cat <<'EOF' | sed 's/^          //' > "$FLUTTER_SMOKE_DIR/lib/main.dart"
+          import 'package:flutter/material.dart';
+
+          import 'person.dart';
+
+          void main() {
+            final person = Person()..name = 'Ada';
+            runApp(
+              Directionality(
+                textDirection: TextDirection.ltr,
+                child: Text(person.name),
+              ),
+            );
+          }
+          EOF
+          cat <<'EOF' | sed 's/^          //' > "$FLUTTER_SMOKE_DIR/test/fory_smoke_test.dart"
+          import 'package:flutter_test/flutter_test.dart';
+          import 'package:fory/fory.dart';
+          import 'package:fory_flutter_smoke/person.dart';
+
+          void main() {
+            test('generated fory serializers work in flutter', () {
+              final fory = Fory();
+              PersonFory.register(fory, Person, id: 1);
+
+              final person = Person()
+                ..name = 'Ada'
+                ..age = Int32(36);
+
+              final bytes = fory.serialize(person);
+              final roundTrip = fory.deserialize<Person>(bytes);
+
+              expect(roundTrip.name, 'Ada');
+              expect(roundTrip.age, Int32(36));
+            });
+          }
+          EOF
+      - name: Get Flutter dependencies
+        run: |
+          cd "$FLUTTER_SMOKE_DIR"
+          flutter pub get
+      - name: Generate Flutter smoke code
+        run: |
+          cd "$FLUTTER_SMOKE_DIR"
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Run Flutter smoke tests
+        run: |
+          cd "$FLUTTER_SMOKE_DIR"
+          flutter test
+      - name: Analyze Flutter smoke app
+        run: |
+          cd "$FLUTTER_SMOKE_DIR"
+          flutter analyze
+      - name: Build Flutter smoke app (AOT)
+        run: |
+          flutter config --enable-linux-desktop
+          cd "$FLUTTER_SMOKE_DIR"
+          flutter build linux --release
+
+  lint:
+    name: Code Style Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up JDK ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: "oracle"
+      - name: Check License Header
+        uses: korandoru/hawkeye@v3
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.8
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+      - name: Check code style
+        run: python ./ci/run_ci.py format
+
+  validate_fory_site_build:
+    name: Validate Fory Site Build
+    runs-on: ubuntu-latest
+    if: github.repository == 'apache/fory' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    steps:
+      - name: Checkout fory
+        uses: actions/checkout@v5
+        with:
+          path: fory
+
+      - name: Checkout fory-site
+        uses: actions/checkout@v5
+        with:
+          repository: apache/fory-site
+          ref: main
+          path: fory-site
+
+      - name: Set up Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+          cache-dependency-path: fory-site/package-lock.json
+
+      - name: Sync files and validate site build
+        run: |
+          python3 fory/ci/validate_fory_site_sync.py fory fory-site

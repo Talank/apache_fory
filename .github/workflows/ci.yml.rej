@@ -1,0 +1,21 @@
+@@ -23,18 +23,19 @@
+   push:
+     branches:
+       - main
+       - "releases/**"
+       - "deploy/**"
+       - "test*"
+     tags:
+       - v*
+   pull_request:
+     paths-ignore:
+       - "**/*.md"
+       - "LICENSE"
+       - ".vscode/**"
+       - ".gitignore"
+       - "licenses/**"
+       - "DISCLAIMER"
+       - "NOTICE"
+     types: ["opened", "reopened", "synchronize"]
++  workflow_dispatch:
+\ No newline at end of line
