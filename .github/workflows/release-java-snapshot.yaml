@@ -18,15 +18,11 @@
 name: Publish Fory Java Snapshot
 
 on:
-  push:
-    branches:
-      - main
-      - release-java-snapshot
-
+  workflow_dispatch:
 jobs:
   publish-java:
-    runs-on: ubuntu-latest
-    if: github.repository == 'apache/fory'
+    runs-on: ${{ matrix.os }}
+    if: always()
     steps:
       - uses: actions/checkout@v5
       - name: Set up Maven Central Repository
@@ -44,3 +40,9 @@ jobs:
         env:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USER }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PW }}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+      fail-fast: false
